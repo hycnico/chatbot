@@ -23,11 +23,19 @@ type StreamChunk = {
   }[]
 }
 
+// 添加新的类型定义
+type SearchResult = {
+  title: string;
+  link: string;
+  snippet: string;
+}
+
 // 添加配置常量
 const API_CONFIG = {
   baseUrl: 'https://api.siliconflow.cn/v1/chat/completions',
-  model: 'Qwen/Qwen2.5-7B-Instruct', // 选择您想使用的模型
+  model: 'deepseek-ai/deepseek-vl2', // 选择您想使用的模型
   apiKey: process.env.NEXT_PUBLIC_SILICON_API_KEY || '', // 请确保在.env.local中设置此环境变量
+  searchApiUrl: '/api/search' // 我们将添加一个新的API路由来处理搜索
 }
 
 const ChatInterface = () => {
@@ -52,6 +60,7 @@ const ChatInterface = () => {
   const [inputValue, setInputValue] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const [isWebEnabled, setIsWebEnabled] = useState(false)
   
   // 取消未完成的请求
   useEffect(() => {
@@ -62,12 +71,38 @@ const ChatInterface = () => {
     }
   }, [])
 
+  // 添加搜索函数
+  const searchWeb = async (query: string): Promise<string> => {
+    try {
+      const response = await fetch(API_CONFIG.searchApiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query })
+      });
+      
+      if (!response.ok) {
+        throw new Error('搜索请求失败');
+      }
+      
+      const searchResults: SearchResult[] = await response.json();
+      
+      // 将搜索结果格式化为文本
+      return searchResults.map(result => 
+        `标题: ${result.title}\n链接: ${result.link}\n摘要: ${result.snippet}\n\n`
+      ).join('---\n');
+    } catch (error) {
+      console.error('搜索失败:', error);
+      throw error;
+    }
+  }
+
   // 修改发送消息处理函数
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!inputValue.trim() || isLoading) return
 
-    // 添加用户消息
     const userMessage: Message = {
       id: Date.now(),
       content: inputValue,
@@ -77,10 +112,25 @@ const ChatInterface = () => {
     setInputValue("")
     setIsLoading(true)
 
-    // 创建新的 AbortController
     abortControllerRef.current = new AbortController()
 
     try {
+      let messageContent = inputValue;
+      let systemPrompt = '';
+      
+      // 如果启用了联网功能，先进行网络搜索
+      if (isWebEnabled) {
+        try {
+          const searchResults = await searchWeb(inputValue);
+          systemPrompt = `以下是关于"${inputValue}"的网络搜索结果：\n\n${searchResults}\n请根据以上搜索结果，对用户的问题"${inputValue}"进行全面的回答。`;
+          messageContent = systemPrompt;
+        } catch (error) {
+          console.error('搜索失败:', error);
+          // 如果搜索失败，回退到普通对话
+          messageContent = inputValue;
+        }
+      }
+
       const response = await fetch(API_CONFIG.baseUrl, {
         method: 'POST',
         headers: {
@@ -92,7 +142,7 @@ const ChatInterface = () => {
           messages: [
             {
               role: 'user',
-              content: inputValue
+              content: messageContent
             }
           ],
           stream: true
@@ -140,7 +190,7 @@ const ChatInterface = () => {
           }
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       if (error.name === 'AbortError') {
         console.log('请求被取消')
       } else {
@@ -202,7 +252,13 @@ const ChatInterface = () => {
             className="flex-1"
             disabled={isLoading}
           />
-          <Button variant="outline" size="icon" type="button" disabled={isLoading}>
+          <Button 
+            variant={isWebEnabled ? "default" : "outline"} 
+            size="icon" 
+            type="button" 
+            disabled={isLoading}
+            onClick={() => setIsWebEnabled(!isWebEnabled)}
+          >
             <Globe className="h-4 w-4" />
           </Button>
           <Button variant="outline" size="icon" type="button" disabled={isLoading}>
